@@ -7,9 +7,23 @@ app.get('/', function (req, res) {
 });
 
 server.on('request', app);
+
+// Catching interrupts
+process.on('SIGINT', () => {
+  // Close websocket connection
+  wss.clients.forEach(function (client) {
+    client.close();
+  })
+  server.close(() => {
+    shutdownDB();
+  });
+});
+
 server.listen(3000, function () {
   console.log('Listening on 3000');
 });
+
+
 
 /** Begin Websockets */
 
@@ -32,6 +46,11 @@ wss.on('connection', function connection(ws) {
   // Log the number of clients connected
   console.log('Clients connection', numClients);
 
+  // Whenever a connection happens, log the total visitors and current time
+  // Have to call the values as the actual things we're inserting
+  db.run(`INSERT INTO visitors (count, time)
+    VALUES (${numClients}, datetime('now'))`);
+
   // Broadcast command -- sends a message to every connected client
   wss.broadcast(`Current visitors: ${numClients}`);
 
@@ -40,7 +59,7 @@ wss.on('connection', function connection(ws) {
   if (ws.readyState === ws.OPEN) {
     ws.send('Welcome to the server!');
   }
-
+  
   // When the web socket closes
   ws.on('close', function close() {
     wss.broadcast(`Current visitors: ${numClients}`);
@@ -54,3 +73,45 @@ wss.broadcast = function broadcast(data) {
     client.send(data);
   });
 };
+
+/** End Websockets */
+
+/** Begin Database */
+
+// Import the Library
+const sqlite = require('sqlite3');
+
+// Set up a new database -- put it in memory (will erase on restart)
+const db = new sqlite.Database(':memory:');
+
+// Set up a table -- every time the service starts
+// -- serialize: makes sure the database is set up before write to the table
+db.serialize(() => {
+  // Run SQL command -- db.run
+  db.run((`
+    CREATE TABLE visitors (
+        count INTEGER,
+        time TEXT
+    )
+  `))
+});
+
+// Shorthand function -- not repeat queries over and over
+// -- Query visitor table to get counts
+function getCounts() {
+  // every row, do something
+  db.each("SELECT * FROM visitors", (err, row) => {
+    console.log(row);
+  })
+}
+
+// Always needs to close a database
+// -- call this function in catching the interrupts -- use a listener in server setup
+function shutdownDB() {
+  // Get final counts for day
+  getCounts();
+  // Close the database
+  console.log("Shutting down the database");
+  db.close();
+}
+
